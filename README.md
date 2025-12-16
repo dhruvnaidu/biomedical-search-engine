@@ -31,13 +31,11 @@ pip install -r requirements.txt
 
 ### 3️⃣ Configure Google Gemini API Key
 
-Create a `.env` file in the project root and add your API key:
+Create or edit the `.env` file in the project root and add your API key:
 
 ```env
 GEMINI_API_KEY=your_actual_api_key_here
 ```
-
-> ⚠️ **Note:** Ensure `.env` is added to `.gitignore` to avoid exposing your API key.
 
 ---
 
