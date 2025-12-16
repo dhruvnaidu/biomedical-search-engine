@@ -9,7 +9,7 @@ DATA_DIR = BASE_DIR / "data"
 
 # 👉 POINTING TO YOUR SPECIFIC NESTED PATH
 # Path: biomedical-search-engine/data/pubmedqa/data/ori_pqal.json
-DATA_PATH = DATA_DIR / "pubmedqa" / "data" / "ori_pqal.json" 
+DATA_PATH = DATA_DIR / "ori_pqal.json" 
 
 # Paths for caching processed data
 PROCESSED_TEXTS_PATH = DATA_DIR / "processed_texts.csv"
