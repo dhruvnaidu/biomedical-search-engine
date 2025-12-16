@@ -1,0 +1,9 @@
+torch
+transformers
+sentence-transformers
+faiss-cpu
+google-generativeai
+pandas
+numpy
+python-dotenv
+tqdm
