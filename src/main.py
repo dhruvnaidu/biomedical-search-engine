@@ -1,71 +1,92 @@
 import argparse
 import os
-import pandas as pd
 import numpy as np
-from .data_loader import DataLoader
-from .embeddings import EmbeddingGenerator
-from .search_engine import SearchEngine
-from .reranker import GeminiReranker
-from .config import PROCESSED_TEXTS_PATH, EMBEDDINGS_PATH, DATA_PATH
+import pandas as pd
+from src.data_loader import DataLoader
+from src.embeddings import EmbeddingGenerator  # FIXED: Changed from EmbeddingModel
+from src.search_engine import SearchEngine
+from src.reranker import GeminiReranker
+from src.config import DATA_PATH, EMBEDDINGS_PATH
+from src.evaluation import Evaluator
 
 def main():
     parser = argparse.ArgumentParser(description="Biomedical Search Engine")
-    parser.add_argument("--query", type=str, required=True, help="The biomedical question to answer")
-    
-    # Defaults to DATA_PATH from config.py (ori_pqal.json)
-    parser.add_argument("--data", type=str, default=str(DATA_PATH), help="Path to input JSON data")
-    
-    parser.add_argument("--reindex", action="store_true", help="Force regeneration of embeddings")
-    
+    parser.add_argument("--query", type=str, help="Search query")
+    parser.add_argument("--evaluate", action="store_true", help="Run evaluation metrics (Precision, Recall, NDCG)")
+    parser.add_argument("--method", type=str, default="hybrid", choices=["vector", "bm25", "hybrid"], help="Retrieval method")
+    parser.add_argument("--samples", type=int, default=50, help="Number of samples for evaluation")
     args = parser.parse_args()
 
     # 1. Load Data
-    # Check if we have cached embeddings to save time
-    if os.path.exists(PROCESSED_TEXTS_PATH) and os.path.exists(EMBEDDINGS_PATH) and not args.reindex:
-        print("📂 Loading cached embeddings and data...")
-        df = pd.read_csv(PROCESSED_TEXTS_PATH)
-        embeddings = np.load(EMBEDDINGS_PATH)
-        embedder = EmbeddingGenerator() # Initialize to load model for query encoding
-    else:
-        # Load and Process Fresh Data from the JSON file
-        loader = DataLoader(args.data)
-        df = loader.load_and_process()
-        
-        # Generate Embeddings
-        embedder = EmbeddingGenerator()
-        embeddings = embedder.generate(df["text"].tolist())
-        
-        # Save Cache
-        df.to_csv(PROCESSED_TEXTS_PATH, index=False)
-        np.save(EMBEDDINGS_PATH, embeddings)
-        print("💾 Embeddings saved.")
+    loader = DataLoader(DATA_PATH)
+    df = loader.load_and_process()
 
-    # 2. Initial Semantic Search
-    searcher = SearchEngine(embeddings, df)
-    query_vec = embedder.encode_query(args.query)
-    initial_results = searcher.search(query_vec, top_k=5)
+    # 2. Load Embeddings
+    # Initialize the generator (class name is EmbeddingGenerator)
+    embedder = EmbeddingGenerator() 
     
-    print(f"\n🔍 Found {len(initial_results)} initial matches via FAISS.")
+    # Check if embeddings exist
+    if os.path.exists(EMBEDDINGS_PATH):
+        print(f"📂 Loading embeddings from {EMBEDDINGS_PATH}...")
+        embeddings = np.load(EMBEDDINGS_PATH)
+    else:
+        print("⏳ Generating embeddings (this may take time)...")
+        embeddings = embedder.generate(df["text"].tolist())
+        np.save(EMBEDDINGS_PATH, embeddings)
 
-    # 3. LLM Reranking
+    # 3. Initialize Search Engine
+    # We pass the 'embedder' instance so the search engine can encode queries on the fly
+    search_engine = SearchEngine(df, embeddings, embedder)
+
+    # ---------------------------
+    # EVALUATION MODE
+    # ---------------------------
+    if args.evaluate:
+        evaluator = Evaluator(search_engine)
+        print(f"📊 Generating synthetic ground truth from {args.samples} random papers...")
+        ground_truth = evaluator.generate_known_item_ground_truth(sample_size=args.samples)
+        
+        # Run Evaluation
+        results = evaluator.evaluate(ground_truth, k=5, method=args.method)
+        
+        print("\n" + "="*30)
+        print(f"EVALUATION RESULTS ({args.method.upper()})")
+        print("="*30)
+        for metric, value in results.items():
+            print(f"{metric}: {value:.4f}")
+        print("="*30)
+        return
+
+    # ---------------------------
+    # SEARCH MODE
+    # ---------------------------
+    if not args.query:
+        print("❌ Please provide a --query or use --evaluate")
+        return
+
+    print(f"\n🔍 Retrieving top 10 candidates using {args.method.upper()}...")
+    
+    # Step 1: Retrieval
+    retrieved_docs = search_engine.search(args.query, top_k=10, method=args.method)
+
+    print("\n🤖 Re-ranking with Gemini...")
+    # Step 2: Reranking
     reranker = GeminiReranker()
-    final_results = reranker.rerank(args.query, initial_results)
+    reranked_docs = reranker.rerank(args.query, retrieved_docs)
 
-    # 4. Output
     print("\n" + "="*50)
-    print(f"🤖 FINAL ANSWER for: {args.query}")
+    print(f"FINAL ANSWER for: '{args.query}'")
     print("="*50)
     
-    if "ranked_results" in final_results and final_results["ranked_results"]:
-        for item in final_results["ranked_results"]:
+    if "ranked_results" in reranked_docs and reranked_docs["ranked_results"]:
+        for item in reranked_docs["ranked_results"]:
             print(f"\n📄 Title: {item.get('title')}")
             print(f"⭐ Score: {item.get('relevance_score')}")
             print(f"💡 Reason: {item.get('relevance_reason')}")
     else:
-        # Fallback if LLM fails
         print("Raw Search Results (LLM processing unavailable):")
-        for res in initial_results:
-             print(f"- {res['title']}")
+        for res in retrieved_docs:
+             print(f"- {res.get('title', 'No Title')}: {res.get('text')[:100]}...")
 
 if __name__ == "__main__":
     main()
